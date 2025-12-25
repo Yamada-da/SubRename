@@ -1,5 +1,5 @@
 # SubRename
-A lightweight tool designed to automate the renaming of subtitle files, specifically optimized for anime collections.<br/>
+A lightweight subtitle renaming tool written using Gemini, originally intended for batch renaming of animation subtitles.<br/>
 
 For Simplified Chinese version： [[简体中文]](https://github.com/Yamada-da/SubRename/blob/main/README.sc.md)
 
