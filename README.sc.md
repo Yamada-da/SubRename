@@ -1,6 +1,8 @@
 # 字幕文件自动重命名视频文件名工具
 使用Gemini写的一个字幕重命名小工具，初衷是用在动画字幕的批量命名上。
 
+For English version：[English](https://github.com/Yamada-da/SubRename/blob/main/README.md)
+
 ## 使用说明：
 程序已内置了多种文件名的识别逻辑，拖入字幕文件，按提示输入数字选择处理方法即可。
 
