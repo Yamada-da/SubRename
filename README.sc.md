@@ -1,3 +1,4 @@
+![image](https://github.com/Yamada-da/SubRename/blob/main/Screenshot/Banner.png)
 # 字幕文件自动重命名视频文件名工具
 使用Gemini写的一个字幕重命名小工具，初衷是用在动画字幕的批量命名上。
 
