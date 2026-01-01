@@ -1,4 +1,4 @@
-
+![image](https://github.com/Yamada-da/SubRename/blob/main/Screenshot/Banner.png)
 A lightweight subtitle renaming tool written using Gemini, originally intended for batch renaming of animation subtitles.<br/>
 
 For Simplified Chinese version： [[简体中文]](https://github.com/Yamada-da/SubRename/blob/main/README.sc.md)
