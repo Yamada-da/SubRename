@@ -118,34 +118,102 @@ def extract_episode_identifier(filename):
     for pattern in special_patterns:
         match = re.search(pattern, filename)
         if match:
+            # For specials, combine the prefix and number to create a unique ID (e.g., "OVA01")
             groups = [g for g in match.groups() if g is not None]
+            # Normalize to remove spaces and ensure consistency
             return "".join(groups).upper()
 
     # Patterns for regular episodes, now supporting decimals and international formats
     regular_patterns = [
         r'(?i)S\d{1,2}E(\d{1,3}(?:\.\d)?)',       # For S01E01, S01E10.5 etc.
-        r'第(\d{1,3}(?:\.\d)?)(?:集|話|话)',      # For 第1集, 第1話, 第1话 (Chinese, Japanese)
+        r'第(\d{1,3}(?:\.\d)?)(?:集|話|话)',      # For 第1集, 第1話, 第1话
         r'(\d{1,3}(?:\.\d)?)\s*화',              # For 1화 (Korean)
-        r'(?i)(?:Épisode|Episodio|Episódio|Episod)\s*(\d{1,3}(?:\.\d)?)', # For Épisode/Episodio/Episódio/Episod 1 (French, Italian, Spanish, Portuguese, Malay)
-        r'(?i)(?:ตอน(?:ที่)?)\s*(\d{1,3}(?:\.\d)?)', # For ตอน 1 (Thai)
+        r'(?i)(?:Episodio|Episódio|Episod)\s*(\d{1,3}(?:\.\d)?)', # Italian, Spanish, Portuguese, Malay
+        r'(?i)(?:ตอน(?:ที่)?)\s*(\d{1,3}(?:\.\d)?)', # Thai
         r'(?i)(?:Эпизод|Серия)\s*(\d{1,3}(?:\.\d)?)', # For Эпизод 1, Серия 1 (Russian)
+        r'(?i)Épisode\s*(\d{1,3}(?:\.\d)?)',     # For Épisode 1 (French)
         r'\[(\d{1,3}(?:\.\d)?(?:v\d)?)\]',        # For [01] or "[01v2]" or "[10.5]"
         r'(?i)[\s\._\-]EP?(\d{1,3}(?:\.\d)?)',    # For E01, EP01, -01, .01, 10.5
         r'-\s*(\d{1,3}(?:\.\d)?)',                # For formats like " - 01"
         r'\s(\d{1,3}(?:\.\d)?)\b',                # For formats like "... 01.ass" or "... 10.5.ass"
+        # NEW: For numbers at the end of the filename stem (e.g. name01.ass, name1.ass)
+        # Looks for 1-3 digits (optional decimal) before the file extension(s).
+        # (?<!\d) ensures we don't match the last 3 digits of a year like 2020.
+        r'(?<!\d)(\d{1,3}(?:\.\d)?)(?:v\d)?(?=(?:\.[a-zA-Z0-9]+)+$)',
     ]
 
     for pattern in regular_patterns:
         match = re.search(pattern, filename)
         if match:
+            # Return the last non-empty group, which is always the number
             return [g for g in match.groups() if g is not None][-1].strip()
             
     return None
 
+def expand_paths(paths, recursive=True):
+    """
+    Expands directories in the list to include files.
+    If recursive is True, walks all subdirectories.
+    If recursive is False, only checks the top level of directories.
+    Handles Font folders as units.
+    """
+    expanded = []
+    for p in paths:
+        if os.path.isfile(p):
+            expanded.append(p)
+        elif os.path.isdir(p):
+            # Check if the folder is a Font folder (treat as unit)
+            if re.search(r'(?i)font', os.path.basename(p.rstrip(os.sep))):
+                expanded.append(p)
+            else:
+                if recursive:
+                    for root, dirs, files in os.walk(p):
+                        font_dirs = [d for d in dirs if re.search(r'(?i)font', d)]
+                        for fd in font_dirs:
+                            expanded.append(os.path.join(root, fd))
+                            dirs.remove(fd)
+                        
+                        for f in files:
+                            if f.lower() in ['.ds_store', 'thumbs.db', 'desktop.ini']:
+                                continue
+                            expanded.append(os.path.join(root, f))
+                else:
+                    try:
+                        for entry in os.scandir(p):
+                            if entry.is_file():
+                                if entry.name.lower() in ['.ds_store', 'thumbs.db', 'desktop.ini']:
+                                    continue
+                                expanded.append(entry.path)
+                            elif entry.is_dir() and re.search(r'(?i)font', entry.name):
+                                expanded.append(entry.path)
+                    except PermissionError as e:
+                        print(f"{COLOR_RED}Permission denied accessing '{p}': {e}{COLOR_RESET}")
+
+    return expanded
+
+def ask_with_preset(config_key, question, options):
+    """Generic function to ask a question or use a preset."""
+    preset_value = CONFIG.get(config_key)
+    if preset_value is not None and preset_value in options.keys():
+        print(f"\nPreset found for '{question}': Choosing '{options[preset_value]}'")
+        return preset_value
+    
+    print(f"\n{question}")
+    for key, value in options.items():
+        print(f"  {key}. {value}")
+    
+    while True:
+        try:
+            choice = int(input(f"Enter your choice ({'/'.join(map(str, options.keys()))}): "))
+            if choice in options.keys():
+                return choice
+            else: print(f"{COLOR_RED}Invalid choice.{COLOR_RESET}")
+        except ValueError: print(f"{COLOR_RED}Invalid input.{COLOR_RESET}")
+
 def get_files_from_user(prompt_message):
     """
     Gets a list of file paths from user drag-and-drop input.
-    Validates input for file existence and handles easter egg.
+    Validates input and asks for recursion if subfolders are detected.
     """
     print(prompt_message)
     print("Press Enter on an empty line to exit.")
@@ -271,6 +339,11 @@ def get_files_from_user(prompt_message):
             - Fixed Chinese "第x话" recognition, supporting filename recognition for more languages.
             - Optimized the automatic filename recognition mechanism.
             - Significantly improved the Chinese translation.
+              
+            ------------26.1.12 v0.9.9------------
+            - Added support for folders.
+            - Fixed the issue where titles and numbers in filenames were not separated, causing to be unrecognized.
+            - Fixed the naming issues with special file names like OVA and OAD; now will follow the format entered by the user.
 
             ----------The above is the boring update log----------
 
@@ -293,26 +366,45 @@ def get_files_from_user(prompt_message):
         return 'restart'
 
     # Path validation
-    validated_paths = []
+    valid_inputs = []
     invalid_found = False
     for path in cleaned_paths:
         if os.path.exists(path):
-            validated_paths.append(path)
+            valid_inputs.append(path)
         else:
             invalid_found = True
 
-    if not validated_paths or invalid_found and not validated_paths:
-        print(f"\n{COLOR_RED}Error: Please provide a valid file path. Please drag and drop files instead of typing manually.{COLOR_RESET}")
+    if not valid_inputs or invalid_found and not valid_inputs:
+        print(f"\n{COLOR_RED}Error: Please provide a valid file or folder path. Please drag and drop instead of typing manually.{COLOR_RESET}")
         input("Press Enter to return...")
         return 'restart'
 
-    return validated_paths
+    # Check for subdirectories to ask about recursion
+    has_subdirs = False
+    for path in valid_inputs:
+        if os.path.isdir(path):
+            try:
+                for entry in os.scandir(path):
+                    if entry.is_dir() and not re.search(r'(?i)font', entry.name):
+                        has_subdirs = True
+                        break
+            except PermissionError:
+                pass
+        if has_subdirs:
+            break
+    
+    recursive = True
+    if has_subdirs:
+        choice = ask_with_preset(None, "Subdirectories detected. How to process?", 
+                                 {1: "Current folder only (Non-recursive)", 2: "Include all subfolders (Recursive)"})
+        recursive = (choice == 2)
+
+    return expand_paths(valid_inputs, recursive=recursive)
 
 
 def get_language_from_filename(filename):
-    """Extracts language code from a filename, e.g., '.sc.ass' -> 'sc'."""
-    known_langs = {'ar', 'bg', 'ca', 'cs', 'da', 'de', 'el', 'en', 'es', 'fi', 'fr', 'hi', 'hu', 'id', 'is', 'it', 'ja', 'jp', 'ko', 'lt', 'lv', 'ms', 'my', 'nb', 'ne', 'nl', 'nn', 'pl', 'pt', 'ro', 'ru', 'sc', 'sk', 'sl', 'sv', 'tc', 'th', 'tl', 'tr', 'uk', 'ur', 'vi', 'zh', 'ara', 'ces', 'chs', 'cht', 'chi', 'cho', 'dan', 'deu', 'ell', 'eng', 'fil', 'fin', 'fra', 'heb', 'hun', 'hy', 'ind', 'isl', 'ita', 'jpn', 'kor', 'lat', 'nor', 'pol', 'por', 'ron', 'rus', 'slk', 'slv', 'spa', 'swe', 'tha', 'tur', 'ukr', 'und', 'vie', 'zho', 'zxx', 'ensc', 'entc', 'enjp', 'jpen', 'jpsc', 'jptc', 'scjp', 'scen', 'tcjp', 'tcen', 'zh-CN', 'zh-HK', 'zh-MO', 'zh-SG', 'zh-TW', 'chs-eng', 'cht-eng', 'de-AT', 'de-CH', 'en-AU', 'en-CA', 'en-GB', 'en-IE', 'en-NZ', 'en-US', 'en-ZA', 'en_sc', 'en_tc', 'en+sc', 'en+tc', 'es-419', 'es-LA', 'es-MX', 'es-ES', 'fr-BE', 'fr-CA', 'it-CH', 'nl-BE', 'pt-BR', 'pt-PT', 'sc-en', 'sc-jp', 'sr-Cyrl', 'sr-Latn', 'tc-en', 'tc-jp', 'zh-Hans', 'zh-Hant', 'chs&jpn', 'cht&jpn', 'eng&jpn', 'en-forced'}
-    # If you need to add other language codes, please add here
+    """Extracts language code from a filename."""
+    known_langs = {'ar', 'bg', 'ca', 'cs', 'da', 'de', 'el', 'en', 'es', 'fi', 'fr', 'hi', 'hu', 'id', 'is', 'it', 'ja', 'jp', 'ko', 'lt', 'lv', 'ms', 'my', 'nb', 'ne', 'nl', 'nn', 'pl', 'pt', 'ro', 'ru', 'sc', 'sk', 'sl', 'sv', 'tc', 'th', 'tl', 'tr', 'uk', 'ur', 'vi', 'zh', 'ara', 'ces', 'chs', 'cht', 'chi', 'cho', 'dan', 'deu', 'ell', 'eng', 'fil', 'fin', 'fra', 'heb', 'hun', 'hy', 'ind', 'isl', 'ita', 'jpn', 'kor', 'lat', 'nor', 'pol', 'por', 'ron', 'rus', 'slk', 'slv', 'spa', 'swe', 'tha', 'tur', 'ukr', 'und', 'vie', 'zho', 'zxx', 'ensc', 'entc', 'enjp', 'jpen', 'jpsc', 'jptc', 'scjp', 'scen', 'tcjp', 'tcen', 'zh-CN', 'zh-HK', 'zh-MO', 'zh-SG', 'zh-TW', 'chs-eng', 'cht-eng', 'de-AT', 'de-CH', 'en-AU', 'en-CA', 'en-GB', 'en-IE', 'en-NZ', 'en-US', 'en-ZA', 'en_sc', 'en_tc', 'en+sc', 'en+tc', 'es-419', 'es-LA', 'es-MX', 'es-ES', 'fr-BE', 'fr-CA', 'it-CH', 'nl-BE', 'pt-BR', 'pt-PT', 'sc-en', 'sc-jp', 'sr-Cyrl', 'sr-Latn', 'tc-en', 'tc-jp', 'zh-Hans', 'zh-Hant', 'chs&jpn', 'cht&jpn', 'eng&jpn', 'engsub', 'en-forced'}
     lang_match = re.search(r'\.([a-zA-Z\d\-_&]{2,15})\.([a-zA-Z]{2,4})$', filename)
     if lang_match and lang_match.group(1).lower() in known_langs:
         return lang_match.group(1).lower()
@@ -327,12 +419,12 @@ def group_and_select_languages(file_paths):
     for path in file_paths:
         filename = os.path.basename(path)
         if re.search(r'(?i)font', filename):
-            continue # Skip font files during initial language grouping
+            continue 
         
         episode_id = extract_episode_identifier(filename)
         if not episode_id:
             base_name_for_grouping = re.sub(r'(\.[a-zA-Z]{2,5})?\.[a-zA-Z]{2,4}$', '', filename)
-            episode_id = f"_SINGLE_{base_name_for_grouping}" # Generic ID for files without numbers
+            episode_id = f"_SINGLE_{base_name_for_grouping}"
 
         lang = get_language_from_filename(filename)
         if lang != "default":
@@ -344,29 +436,24 @@ def group_and_select_languages(file_paths):
     if not episodes:
         return [], "default", False
 
-    # Determine mode (series vs movie)
     has_series = any(not id.startswith("_SINGLE_") for id in episodes.keys())
     has_movies = any(id.startswith("_SINGLE_") for id in episodes.keys())
 
     if has_series and has_movies:
         print(f"{COLOR_RED}Warning: Mixed series and movie-style files detected. Processing series files only.{COLOR_RESET}")
-        
         movie_files_skipped = []
         for episode_id, lang_files in episodes.items():
             if episode_id.startswith("_SINGLE_"):
                 for path in lang_files.values():
                     movie_files_skipped.append(os.path.basename(path))
-
         if movie_files_skipped:
             print(f"{COLOR_RED}The following movie-style files will be ignored:{COLOR_RESET}")
             for filename in sorted(movie_files_skipped):
                 print(f"{COLOR_RED}- {filename}{COLOR_RESET}")
-
         episodes = {k: v for k, v in episodes.items() if not k.startswith("_SINGLE_")}
     
     is_movie_mode = not has_series and has_movies
     
-    # --- Preset Logic ---
     preset_lang = CONFIG.get("PRESET_LANGUAGE")
     chosen_lang_str = None
     if isinstance(preset_lang, list):
@@ -382,7 +469,6 @@ def group_and_select_languages(file_paths):
             else:
                  print(f"\n{COLOR_RED}Preset language not found in files. Asking for selection.{COLOR_RESET}")
     
-    # --- Interactive Logic ---
     if chosen_lang_str is None:
         if len(language_codes) > 1:
             print("\nMultiple language versions found. Please choose:")
@@ -406,9 +492,7 @@ def group_and_select_languages(file_paths):
         else:
             chosen_lang_str = "default"
 
-    # --- File Filtering ---
     files_to_process = []
-    # Sort episodes naturally before processing
     sorted_episodes = sorted(episodes.items(), key=lambda item: natural_sort_key(item[0]))
 
     if chosen_lang_str == "all":
@@ -423,25 +507,6 @@ def group_and_select_languages(file_paths):
                 files_to_process.append((lang_files["default"], "default"))
 
     return files_to_process, chosen_lang_str, is_movie_mode
-
-def ask_with_preset(config_key, question, options):
-    """Generic function to ask a question or use a preset."""
-    preset_value = CONFIG.get(config_key)
-    if preset_value is not None and preset_value in options.keys():
-        print(f"\nPreset found for '{question}': Choosing '{options[preset_value]}'")
-        return preset_value
-    
-    print(f"\n{question}")
-    for key, value in options.items():
-        print(f"  {key}. {value}")
-    
-    while True:
-        try:
-            choice = int(input(f"Enter your choice ({'/'.join(map(str, options.keys()))}): "))
-            if choice in options.keys():
-                return choice
-            else: print(f"{COLOR_RED}Invalid choice.{COLOR_RESET}")
-        except ValueError: print(f"{COLOR_RED}Invalid input.{COLOR_RESET}")
 
 def ask_add_suffix(lang_choice):
     if lang_choice == "all":
@@ -462,7 +527,7 @@ def get_target_format(is_movie_mode=False):
         print("Enter the target filename (you can also drag and drop the video file).")
     else:
         print("Enter the target video filename format (or drag and drop a sample video file).")
-        print("Example: [Majo no Tabitabi][01][BDRIP][1080P][H24_FLAC]")
+        print("Example: [Majo no Tabitabi][01][BDRIP][1080P][H264_FLAC]")
         print("Or, type 'sp' for special processing (naming based on other video files).")
     print("-" * 50)
     while True:
@@ -500,7 +565,6 @@ def generate_rename_plan(files_with_lang, target_format, add_suffix, is_movie_mo
 
     if target_format != 'sp':
         best_match = None
-        # Use more specific patterns to find the episode number placeholder in the target format.
         patterns = [
             r'(?i)S\d{1,2}E(\d{1,3}(?:\.\d)?)',
             r'第(\d{1,3}(?:\.\d)?)(?:集|話|话)',
@@ -538,8 +602,12 @@ def generate_rename_plan(files_with_lang, target_format, add_suffix, is_movie_mo
         placeholder_number_part = best_match.group(placeholder_group_index)
         
         padding = len(placeholder_number_part.split('.')[0]) if '.' in placeholder_number_part else len(placeholder_number_part)
-
         start, end = best_match.span(placeholder_group_index)
+
+        # Check if the character immediately preceding the number is alphanumeric
+        prev_char_is_alnum = False
+        if start > 0 and target_format[start-1].isalnum():
+            prev_char_is_alnum = True
 
         for old_path, lang_code in files_with_lang:
             old_filename = os.path.basename(old_path)
@@ -553,7 +621,14 @@ def generate_rename_plan(files_with_lang, target_format, add_suffix, is_movie_mo
                 num_part = special_match.group(2)
                 try:
                     formatted_num = f"{int(float(num_part)):0{padding}d}"
-                    formatted_episode_id = f"{prefix} {formatted_num}"
+                    
+                    # Logic: If compact (test1), keep compact (testOVA1). 
+                    # If spaced/symbol (test 01, [01]), force space (test OVA 01, [OVA 01]).
+                    if prev_char_is_alnum:
+                        formatted_episode_id = f"{prefix}{formatted_num}"
+                    else:
+                        formatted_episode_id = f"{prefix} {formatted_num}"
+                        
                 except ValueError:
                     formatted_episode_id = episode_id
             else:
@@ -601,20 +676,31 @@ def generate_rename_plan(files_with_lang, target_format, add_suffix, is_movie_mo
 
 def execute_rename_plan(rename_plan):
     """
-    Executes the rename plan and returns the target directory and the user's choice about deleting originals.
+    Executes the rename plan and returns a list of target directories.
     """
     if not rename_plan:
         print(f"\n{COLOR_RED}Nothing to rename.{COLOR_RESET}")
         return None, 1
         
-    # Sort the final plan naturally based on the new filename
-    rename_plan.sort(key=lambda item: natural_sort_key(item[1]))
+    # Sort by directory first, then by new filename naturally
+    rename_plan.sort(key=lambda item: (os.path.dirname(item[0]), natural_sort_key(item[1])))
 
     clear_screen()
     print("The following files will be created. Please review:")
     print("=" * 60)
+    
+    current_dir = None
     for old_path, new_name in rename_plan:
-        print(f"Original: {os.path.basename(old_path)}\n    New →: {new_name}\n")
+        file_dir = os.path.dirname(old_path)
+        if file_dir != current_dir:
+            if current_dir is not None:
+                print("") # Spacing between groups
+            print(f"Path: {file_dir}")
+            current_dir = file_dir
+        
+        print(f"Original: {os.path.basename(old_path)}")
+        print(f"    New →: {new_name}\n")
+
     print("=" * 60)
     if input("Press ENTER to continue, or any other key to cancel: ") != "":
         print(f"\n{COLOR_RED}Operation cancelled by user.{COLOR_RESET}")
@@ -622,21 +708,29 @@ def execute_rename_plan(rename_plan):
     
     location_choice = ask_with_preset("PRESET_SAVE_LOCATION", "Where would you like to save the new files?", {1: "In a new 'sub' subfolder", 2: "In the same folder"})
     
-    source_dir = os.path.dirname(rename_plan[0][0])
-    target_dir = os.path.join(source_dir, 'sub') if location_choice == 1 else source_dir
-    if location_choice == 1:
-        os.makedirs(target_dir, exist_ok=True)
-        print(f"\nCreated directory: {target_dir}")
-
     print("\nProcessing files...")
     count = 0
+    # Track used directories for report and subsequent font processing
+    used_directories = set()
+
     for old_path, new_name in rename_plan:
         try:
+            # Determine target directory relative to the *source file*
+            source_dir = os.path.dirname(old_path)
+            if location_choice == 1: # Sub folder
+                target_dir = os.path.join(source_dir, 'sub')
+            else:
+                target_dir = source_dir
+            
+            os.makedirs(target_dir, exist_ok=True)
+            used_directories.add(target_dir)
+
             shutil.copy2(old_path, os.path.join(target_dir, new_name))
             count += 1
         except Exception as e:
             print(f"{COLOR_RED}Error copying '{os.path.basename(old_path)}': {e}{COLOR_RESET}")
-    print(f"\n{COLOR_GREEN}Successfully created {count} new files in '{os.path.abspath(target_dir)}'.{COLOR_RESET}")
+    
+    print(f"\n{COLOR_GREEN}Successfully created {count} new files.{COLOR_RESET}")
 
     delete_choice = 1
     if count > 0:
@@ -651,9 +745,10 @@ def execute_rename_plan(rename_plan):
                 except Exception as e:
                     print(f"{COLOR_RED}Error deleting '{os.path.basename(old_path)}': {e}{COLOR_RESET}")
             print(f"{COLOR_GREEN}Successfully deleted {deleted_count} original files.{COLOR_RESET}")
-    return target_dir, delete_choice
+    
+    return location_choice, delete_choice
 
-def handle_unprocessed_files(all_files, processed_files, target_dir, delete_choice):
+def handle_unprocessed_files(all_files, processed_files, location_choice, delete_choice):
     processed_set = set(processed_files)
     unprocessed_files = [path for path in all_files if path not in processed_set]
 
@@ -679,33 +774,39 @@ def handle_unprocessed_files(all_files, processed_files, target_dir, delete_choi
         )
         if handle_fonts_choice == 1:
             print(f"\n{action_verb} font items...")
-            fonts_dir = os.path.join(target_dir, "Fonts")
-            os.makedirs(fonts_dir, exist_ok=True)
             font_count = 0
             for path in font_files:
                 try:
+                    # Determine target dir relative to this font item
+                    source_dir = os.path.dirname(path)
+                    if location_choice == 1:
+                        target_dir = os.path.join(source_dir, 'sub', 'Fonts')
+                    else:
+                        target_dir = os.path.join(source_dir, 'Fonts')
+                    
+                    os.makedirs(target_dir, exist_ok=True)
+
                     if os.path.isdir(path):
                         if action == shutil.move:
                             for item_name in os.listdir(path):
                                 source_item = os.path.join(path, item_name)
-                                dest_item = os.path.join(fonts_dir, item_name)
+                                dest_item = os.path.join(target_dir, item_name)
                                 shutil.move(source_item, dest_item)
                             os.rmdir(path)
                         else: # copy action
-                            # dirs_exist_ok is available in Python 3.8+
                             if sys.version_info >= (3, 8):
-                                shutil.copytree(path, fonts_dir, dirs_exist_ok=True)
-                            else: # Fallback for older python
+                                shutil.copytree(path, target_dir, dirs_exist_ok=True)
+                            else:
                                 for item in os.listdir(path):
                                     s = os.path.join(path, item)
-                                    d = os.path.join(fonts_dir, item)
+                                    d = os.path.join(target_dir, item)
                                     if os.path.isdir(s):
                                         shutil.copytree(s, d, symlinks=True)
                                     else:
                                         shutil.copy2(s, d)
                         font_count += 1
                     else: # It's a file
-                        action(path, os.path.join(fonts_dir, os.path.basename(path)))
+                        action(path, os.path.join(target_dir, os.path.basename(path)))
                         font_count += 1
                 except Exception as e:
                     print(f"{COLOR_RED}Error processing font item '{os.path.basename(path)}': {e}{COLOR_RESET}")
@@ -715,7 +816,7 @@ def handle_unprocessed_files(all_files, processed_files, target_dir, delete_choi
     if other_unprocessed:
         archive_choice = ask_with_preset(
             "PRESET_ARCHIVE_UNPROCESSED",
-            f"{action_verb} other unprocessed subtitle files into language-specific folders?", #Move/Copy test
+            "Move/Copy other unprocessed subtitle files into language-specific folders?",
             {1: "Yes", 2: "No"}
         )
         if archive_choice == 1:
@@ -727,11 +828,17 @@ def handle_unprocessed_files(all_files, processed_files, target_dir, delete_choi
                 if lang == "default":
                     lang = "misc"
                 
-                lang_dir = os.path.join(target_dir, lang)
-                os.makedirs(lang_dir, exist_ok=True)
+                # Determine target dir relative to this file
+                source_dir = os.path.dirname(path)
+                if location_choice == 1:
+                    target_dir = os.path.join(source_dir, 'sub', lang)
+                else:
+                    target_dir = os.path.join(source_dir, lang)
+                
+                os.makedirs(target_dir, exist_ok=True)
                 
                 try:
-                    action(path, os.path.join(lang_dir, filename))
+                    action(path, os.path.join(target_dir, filename))
                     archived_count += 1
                 except Exception as e:
                     print(f"{COLOR_RED}Error processing '{filename}': {e}{COLOR_RESET}")
@@ -740,8 +847,8 @@ def handle_unprocessed_files(all_files, processed_files, target_dir, delete_choi
 def main():
     while True:
         clear_screen()
-        print("Subtitle Renamer (v 0.9.8)")
-        all_subtitle_paths = get_files_from_user("Please drag and drop SUBTITLE files and press Enter:")
+        print("Subtitle Renamer (v 0.9.9)")
+        all_subtitle_paths = get_files_from_user("Please drag and drop SUBTITLE files or FOLDERS and press Enter:")
         
         if all_subtitle_paths == 'restart':
             continue
@@ -795,11 +902,12 @@ def main():
             if rename_plan == 'restart':
                 continue
 
-            target_dir, delete_choice = execute_rename_plan(rename_plan)
+            location_choice, delete_choice = execute_rename_plan(rename_plan)
 
-            if target_dir:
+            # location_choice is None if cancelled
+            if location_choice:
                 processed_paths = [item[0] for item in rename_plan] if rename_plan else []
-                handle_unprocessed_files(all_subtitle_paths, processed_paths, target_dir, delete_choice)
+                handle_unprocessed_files(all_subtitle_paths, processed_paths, location_choice, delete_choice)
 
         if input("\nPress ENTER to start another conversion, or any other key to exit: ") != "":
             break
@@ -808,4 +916,3 @@ if __name__ == "__main__":
     if sys.platform == "win32":
         os.system('')
     main()
-
